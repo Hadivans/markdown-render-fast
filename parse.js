@@ -11,7 +11,7 @@ export function parse(markdown) {
   if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
   const state = { refs: new Map(), lines };
   const blocks = parseBlocks(state);
-  stripHtmlTrailingNewlines(blocks, lines);
+  stripHtmlTrailingNewlines(blocks, lines, src.endsWith('\n'));
   const out = [];
   renderBlocks(blocks, state.refs, out);
   return out.join('');
@@ -23,7 +23,7 @@ export function parse(markdown) {
 // (its container ended, e.g. cm-175 `<div></li>`). Types 1-5 end at
 // their closing tag and keep the newline when the next line is not
 // blank (cm-169) but drop it when a blank line follows (cm-183, cm-308).
-function stripHtmlTrailingNewlines(children, lines) {
+function stripHtmlTrailingNewlines(children, lines, endsWithNL) {
   const leaves = [];
   (function walk(nodes) {
     for (const n of nodes) {
@@ -37,6 +37,11 @@ function stripHtmlTrailingNewlines(children, lines) {
       const next = lines[n.endLine + 1];
       const nextBlank = next !== undefined && isBlankLine(next);
       if (nextBlank || (n.type >= 6 && n !== last)) {
+        n.text = n.text.slice(0, -1);
+      } else if (n === last && n.endLine === lines.length - 1 && !endsWithNL) {
+        // The input's last line had no trailing newline, so the `\n`
+        // appended to the HTML block's text is synthetic: drop it
+        // (gfm-657: output must end `</blockquote>` with no newline).
         n.text = n.text.slice(0, -1);
       }
     }
@@ -1598,7 +1603,17 @@ function parseBlocks(state) {
         // Lazy paragraph continuation: the line (after matched
         // containers) belongs to the paragraph, with its leading
         // whitespace stripped (cm-238 `    - bar` -> `- bar`).
-        deepest.lines.push(lazyRest.replace(/^[ \t]+/, ''));
+        // A lazy line that looks like a level-1 setext underline
+        // (`===`), added AFTER the paragraph already had a lazy line,
+        // is padded to 4 spaces so it cannot be read as a setext
+        // underline (cm-093: `> foo\nbar\n===` -> `    ===`).
+        const stripped = lazyRest.replace(/^[ \t]+/, '');
+        if (deepest.hadLazy && /^=+[ \t]*$/.test(stripped)) {
+          deepest.lines.push('    ' + stripped);
+        } else {
+          deepest.lines.push(stripped);
+        }
+        deepest.hadLazy = true;
         lastLineBlank = false;
         continue;
       }
