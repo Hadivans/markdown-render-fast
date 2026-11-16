@@ -543,12 +543,13 @@ function tryAutolink(s, i) {
 }
 
 // Raw inline HTML: comment, PI, declaration, CDATA, open/close tag.
-// Returns [html, end] or null. The caller checks the disallowed list.
+// Returns [html, end] or null.
 function tryInlineHtml(s, i) {
   const n = s.length;
   if (i + 1 >= n || s.charCodeAt(i + 1) === 32) return null;
-  // comment <!-- ... -->
+  // comment <!-- ... -->  (<!--> and <!---> are NOT comments)
   if (s.startsWith('<!--', i)) {
+    if (i + 4 < n && (s.charCodeAt(i + 4) === 62 || (s.charCodeAt(i + 4) === 45 && i + 5 < n && s.charCodeAt(i + 5) === 62))) return null;
     let j = i + 4;
     while (j < n) {
       if (s.startsWith('-->', j)) return [s.slice(i, j + 3), j + 3];
@@ -556,6 +557,12 @@ function tryInlineHtml(s, i) {
       j++;
     }
     return null;
+  }
+  // CDATA <![CDATA[ ... ]]>  (must come before the <! declaration check)
+  if (s.startsWith('<![CDATA[', i)) {
+    const j = s.indexOf(']]>', i + 9);
+    if (j < 0) return null;
+    return [s.slice(i, j + 3), j + 3];
   }
   // processing instruction <? ... ?>
   if (s.startsWith('<?', i)) {
@@ -573,12 +580,6 @@ function tryInlineHtml(s, i) {
     }
     return null;
   }
-  // CDATA <![CDATA[ ... ]]>
-  if (s.startsWith('<![CDATA[', i)) {
-    const j = s.indexOf(']]>', i + 9);
-    if (j < 0) return null;
-    return [s.slice(i, j + 3), j + 3];
-  }
   // open or close tag
   let j = i + 1;
   let closing = false;
@@ -588,47 +589,56 @@ function tryInlineHtml(s, i) {
   }
   if (j >= n || !isAlpha(s.charCodeAt(j))) return null;
   while (j < n && (isAlnum(s.charCodeAt(j)) || s.charCodeAt(j) === 45)) j++;
-  // attributes
+  // attributes: each one must be preceded by whitespace (cm-622
+  // `<a href='bar'title=title>` and cm-609 `<m:abc>` are NOT tags).
+  // A closing tag takes no attributes at all (cm-624 `</a href="foo">`).
   while (j < n) {
     const c = s.charCodeAt(j);
     if (c === 62) return [s.slice(i, j + 1), j + 1];
     if (c === 47 && j + 1 < n && s.charCodeAt(j + 1) === 62) return [s.slice(i, j + 2), j + 2];
-    if (c === 32 || c === 9 || c === 10) {
-      j++;
-      continue;
-    }
+    if (c !== 32 && c !== 9 && c !== 10) return null;
+    // Skip the whitespace run; the next token must be `>`, `/>`, or an
+    // attribute name. (A closing tag has no attributes.)
+    let k = j;
+    while (k < n && (s.charCodeAt(k) === 32 || s.charCodeAt(k) === 9 || s.charCodeAt(k) === 10)) k++;
+    if (k >= n) return null;
+    const nc = s.charCodeAt(k);
+    if (nc === 62) return [s.slice(i, k + 1), k + 1];
+    if (nc === 47 && k + 1 < n && s.charCodeAt(k + 1) === 62) return [s.slice(i, k + 2), k + 2];
+    if (closing) return null;
     // attribute name
-    if (!(isAlpha(c) || c === 95 || c === 58)) return null;
+    if (!(isAlpha(nc) || nc === 95 || nc === 58)) return null;
+    j = k;
     while (j < n) {
       const d = s.charCodeAt(j);
       if (isAlnum(d) || d === 95 || d === 58 || d === 46 || d === 45) j++;
       else break;
     }
     // optional = value
-    let k = j;
-    while (k < n && (s.charCodeAt(k) === 32 || s.charCodeAt(k) === 9 || s.charCodeAt(k) === 10)) k++;
-    if (k < n && s.charCodeAt(k) === 61) {
-      k++;
-      while (k < n && (s.charCodeAt(k) === 32 || s.charCodeAt(k) === 9 || s.charCodeAt(k) === 10)) k++;
-      if (k >= n) return null;
-      const q = s.charCodeAt(k);
+    let v = j;
+    while (v < n && (s.charCodeAt(v) === 32 || s.charCodeAt(v) === 9 || s.charCodeAt(v) === 10)) v++;
+    if (v < n && s.charCodeAt(v) === 61) {
+      v++;
+      while (v < n && (s.charCodeAt(v) === 32 || s.charCodeAt(v) === 9 || s.charCodeAt(v) === 10)) v++;
+      if (v >= n) return null;
+      const q = s.charCodeAt(v);
       if (q === 34 || q === 39) {
-        const endq = s.indexOf(String.fromCharCode(q), k + 1);
+        const endq = s.indexOf(String.fromCharCode(q), v + 1);
         if (endq < 0) return null;
         j = endq + 1;
       } else {
         // unquoted value: no space, ", ', =, <, >, `
-        let e = k;
+        let e = v;
         while (e < n) {
           const d = s.charCodeAt(e);
           if (d === 32 || d === 9 || d === 10 || d === 34 || d === 39 || d === 61 || d === 60 || d === 62 || d === 96) break;
           e++;
         }
-        if (e === k) return null;
+        if (e === v) return null;
         j = e;
       }
     } else {
-      j = k;
+      j = v;
     }
   }
   return null;
@@ -638,12 +648,11 @@ function tryInlineHtml(s, i) {
 // Returns [node, end] or null. `prev` is the char code before i (-1 at start).
 function tryExtendedAutolink(s, i, prev) {
   const n = s.length;
-  // Must be at start or after whitespace or one of * _ ~ ( [ { " '
+  // Must be at start or after whitespace or punctuation (a `<` before a
+  // bare URL still allows the link, cm-602 `<https://foo.bar/baz bim>`).
   if (prev !== -1) {
     const p = prev;
-    if (!(p === 32 || p === 9 || p === 10 || p === 42 || p === 95 || p === 126 || p === 40 || p === 91 || p === 123 || p === 34 || p === 39)) {
-      return null;
-    }
+    if (isAlnum(p)) return null;
   }
   // www. domain
   if (s.startsWith('www.', i)) {
@@ -663,11 +672,40 @@ function tryExtendedAutolink(s, i, prev) {
     const dest = s.slice(i, end);
     return [['l', cleanUrl(dest), null, [['t', dest]]], end];
   }
+  // scheme: email[/single-path-segment]  (mailto:, xmpp:, gfm-633/634/635)
+  {
+    const sm = /^[A-Za-z][A-Za-z0-9+.-]{1,31}:/.exec(s.slice(i));
+    if (sm && !s.startsWith('http://', i) && !s.startsWith('https://', i)) {
+      const after = i + sm[0].length;
+      const em = /^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+/.exec(s.slice(after));
+      if (em) {
+        let end = after + em[0].length;
+        // Reject if the domain is immediately followed by - or _
+        // (the domain would end with it, gfm-632).
+        if (end < n && (s.charCodeAt(end) === 45 || s.charCodeAt(end) === 95)) return null;
+        // One optional path segment (/txt), no second segment (gfm-635).
+        if (end < n && s.charCodeAt(end) === 47) {
+          let q = end + 1;
+          while (q < n) {
+            const c = s.charCodeAt(q);
+            if (isAlnum(c) || c === 45 || c === 46 || c === 95 || c === 126) q++;
+            else break;
+          }
+          if (q > end + 1) end = q;
+        }
+        const dest = s.slice(i, end);
+        return [['l', cleanUrl(dest), null, [['t', dest]]], end];
+      }
+    }
+  }
   // email: word@domain.tld
   if (isAlnum(s.charCodeAt(i)) || s.charCodeAt(i) === 95 || s.charCodeAt(i) === 46) {
     const m = /^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+/.exec(s.slice(i));
     if (!m) return null;
     let end = i + m[0].length;
+    // Reject if the domain is immediately followed by - or _
+    // (gfm-632 `a.b-c_d@a.b-` / `a.b-c_d@a.b_` are not links at all).
+    if (end < n && (s.charCodeAt(end) === 45 || s.charCodeAt(end) === 95)) return null;
     // Trailing punctuation is not part of an email autolink.
     while (end > i && /[?!.,:;*_~]/.test(s[end - 1])) end--;
     const dest = s.slice(i, end);
@@ -677,39 +715,35 @@ function tryExtendedAutolink(s, i, prev) {
   return null;
 }
 
-// Extend a URL with its path/query/fragment, trimming trailing punctuation
-// per the GFM autolink rules: ? ! . , : ; * _ ~ are excluded, a ) is
-// excluded when unbalanced, and a ; that would close an entity is excluded.
+// Extend a URL with its path/query/fragment, trimming trailing
+// punctuation per the GFM autolink rules. A `)` is part of the URL when
+// it is followed by more URL characters; a TRAILING `)` is kept only
+// while it balances an earlier `(` (gfm-626 `(business))+ok` keeps both
+// `)`, `foo(bar))` drops the last). A trailing `&word;` entity-like
+// suffix is excluded (gfm-627 `&hl;`).
 function extendUrlPath(s, end) {
   const n = s.length;
   let j = end;
-  let openParens = 0;
   while (j < n) {
     const c = s.charCodeAt(j);
     if (c === 32 || c === 60 || c === 10) break;
-    if (c === 40) openParens++;
-    else if (c === 41) {
-      if (openParens === 0) break;
-      openParens--;
-    }
     j++;
   }
   // Trim trailing punctuation.
-  while (j > end) {
-    const c = s.charCodeAt(j - 1);
-    if (c === 63 || c === 33 || c === 46 || c === 44 || c === 58 || c === 59 || c === 42 || c === 95 || c === 126) {
-      j--;
-    } else if (c === 41) {
-      // unbalanced ) -- but we tracked parens; a ) here is balanced, keep it.
-      break;
-    } else break;
+  while (j > end && /[?!.,:;*_~'"'\]}]/.test(s[j - 1])) j--;
+  // Trim a trailing entity-like `&word;` suffix.
+  const tail = s.slice(end, j);
+  const em = /&[A-Za-z0-9]+;$/.exec(tail);
+  if (em) j -= em[0].length;
+  // Trim unbalanced trailing `)`.
+  let opens = 0, closes = 0;
+  for (let k = end; k < j; k++) {
+    if (s.charCodeAt(k) === 40) opens++;
+    else if (s.charCodeAt(k) === 41) closes++;
   }
-  // A trailing ; that would close an entity reference is excluded.
-  if (j > end && s.charCodeAt(j - 1) === 59) {
-    // find the & that would open it
-    let k = j - 2;
-    while (k >= end && /[A-Za-z0-9#]/.test(s[k])) k--;
-    if (k >= end && s.charCodeAt(k) === 38) j--;
+  while (j > end && s.charCodeAt(j - 1) === 41 && closes > opens) {
+    j--;
+    closes--;
   }
   return j;
 }
@@ -759,6 +793,12 @@ function tokenizeInline(src, refs) {
         cur = cur.slice(0, k);
         flush();
         nodes.push(['b']);
+        i++;
+        // After a hard break, the next line's leading spaces/tabs are
+        // stripped (cm-636 `foo  \n     bar` -> `foo<br>bar`). A soft
+        // break keeps them.
+        while (i < n && (src.charCodeAt(i) === 32 || src.charCodeAt(i) === 9)) i++;
+        continue;
       } else {
         cur += '\n';
       }
@@ -773,6 +813,8 @@ function tokenizeInline(src, refs) {
           flush();
           nodes.push(['b']);
           i += 2;
+          // Same leading-space strip as a two-space hard break (cm-637).
+          while (i < n && (src.charCodeAt(i) === 32 || src.charCodeAt(i) === 9)) i++;
           continue;
         }
         if (isAsciiPunct(d)) {
@@ -824,9 +866,12 @@ function tokenizeInline(src, refs) {
       let j = i;
       while (j < n && src.charCodeAt(j) === c) j++;
       const run = j - i;
-      if (c === 126 && run < 2) {
-        cur += '~';
-        i++;
+      // Strikethrough: a run of 1 or 2 tildes is a delimiter (single
+      // `~there~` strikes, gfm-491); a run of 3+ is literal text
+      // (gfm-493 `~~~not~~~` does not strike).
+      if (c === 126 && run > 2) {
+        cur += src.slice(i, j);
+        i = j;
         continue;
       }
       const before = charBefore(src, i);
@@ -968,13 +1013,12 @@ function tokenizeInline(src, refs) {
       }
       const html = tryInlineHtml(src, i);
       if (html) {
+        // NOTE: marked 18.1.3 does NOT escape the GFM "disallowed" tags
+        // (title/style/xmp/...) in practice output (verified by probing
+        // the vendored baseline on gfm-657), so all valid inline HTML is
+        // passed through raw.
         flush();
-        const m = /^<\/?([A-Za-z][A-Za-z0-9-]*)/.exec(html[0]);
-        if (m && DISALLOWED_HTML.has(m[1].toLowerCase())) {
-          nodes.push(['t', html[0]]);
-        } else {
-          nodes.push(['h', html[0]]);
-        }
+        nodes.push(['h', html[0]]);
         i = html[1];
         continue;
       }
@@ -1131,11 +1175,9 @@ function processEmphasis(nodes) {
     const opener = delims[found];
     let use;
     if (closer.ch === '~') {
-      if (opener.n < 2 || closer.n < 2) {
-        ci++;
-        continue;
-      }
-      use = 2;
+      // Strikethrough uses 2 tildes when both sides have 2+, else 1
+      // (single `~there~` strikes, gfm-491).
+      use = opener.n >= 2 && closer.n >= 2 ? 2 : 1;
     } else {
       use = opener.n >= 2 && closer.n >= 2 ? 2 : 1;
     }
@@ -2240,8 +2282,16 @@ function splitTableRow(line) {
   for (let i = 0; i < inner.length; i++) {
     const c = inner.charCodeAt(i);
     if (c === 92 && i + 1 < inner.length) {
-      cur += inner[i] + inner[i + 1];
-      i++;
+      // An escaped pipe `\|` is a literal pipe in the cell (gfm-200:
+      // the code span `` `\|` `` renders as `<code>|</code>`). Other
+      // escapes are left for the inline parser.
+      if (inner.charCodeAt(i + 1) === 124) {
+        cur += '|';
+        i++;
+      } else {
+        cur += inner[i] + inner[i + 1];
+        i++;
+      }
     } else if (c === 124) {
       cells.push(cur.trim());
       cur = '';
@@ -2453,7 +2503,13 @@ function renderTable(tab, refs, out) {
     out.push(inline(tab.header[i], refs));
     out.push('</th>\n');
   }
-  out.push('</tr>\n</thead>\n<tbody>');
+  out.push('</tr>\n</thead>\n');
+  // A table with no body rows has no <tbody> at all (gfm-205).
+  if (tab.rows.length === 0) {
+    out.push('</table>\n');
+    return;
+  }
+  out.push('<tbody>');
   for (const row of tab.rows) {
     out.push('<tr>\n');
     for (let i = 0; i < tab.aligns.length; i++) {
