@@ -672,9 +672,11 @@ function tryExtendedAutolink(s, i, prev) {
     const dest = s.slice(i, end);
     return [['l', 'http://' + cleanUrl(dest), null, [['t', dest]]], end];
   }
-  // http:// or https://
-  if (s.startsWith('http://', i) || s.startsWith('https://', i)) {
-    const m = /^https?:\/\/[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::\d+)?/.exec(s.slice(i));
+  // http:// or https:// (scheme is case-insensitive: Http://, Https://)
+  const lower7 = s.slice(i, i + 7).toLowerCase();
+  const lower8 = s.slice(i, i + 8).toLowerCase();
+  if (lower7 === 'http://' || lower8 === 'https://') {
+    const m = /^https?:\/\/[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::\d+)?/i.exec(s.slice(i));
     if (!m) return null;
     let end = i + m[0].length;
     end = extendUrlPath(s, end);
@@ -684,7 +686,7 @@ function tryExtendedAutolink(s, i, prev) {
   // scheme: email[/single-path-segment]  (mailto:, xmpp:, gfm-633/634/635)
   {
     const sm = /^[A-Za-z][A-Za-z0-9+.-]{1,31}:/.exec(s.slice(i));
-    if (sm && !s.startsWith('http://', i) && !s.startsWith('https://', i)) {
+    if (sm && lower7 !== 'http://' && lower8 !== 'https://') {
       const after = i + sm[0].length;
       const em = /^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+/.exec(s.slice(after));
       if (em) {
@@ -1064,7 +1066,7 @@ function tokenizeInline(src, refs) {
       if (atBoundary) {
         let tried = false;
         if (c === 119 && src.startsWith('www.', i)) tried = true;
-        else if (c === 104 && (src.startsWith('http://', i) || src.startsWith('https://', i))) tried = true;
+        else if ((c === 104 || c === 72) && (src.slice(i, i + 7).toLowerCase() === 'http://' || src.slice(i, i + 8).toLowerCase() === 'https://')) tried = true;
         else if (isAlnum(c) || c === 95 || c === 46) {
           const at = src.indexOf('@', i);
           if (at > i && at - i < 64) {
