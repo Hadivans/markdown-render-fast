@@ -1416,6 +1416,34 @@ function buildBlocks(lines, refs) {
       const deepest = top();
       curRestore(c, lastGood);
       const lazyRest = curRest(c);
+      if (deepest.kind === 'code' && deepest.fenced) {
+        // Fenced code content lines do not need to match a LIST ITEM's
+        // indent: the fence protects its content until the closing fence
+        // (LI1/MINI). But a line without `>` does NOT belong to a code
+        // block inside a BLOCKQUOTE (cm-237/BQ1: the quote closes
+        // instead). And a fence-looking line must not become content: it
+        // closes the containers and may open a new fence (CLOSE0).
+        const failing = open[matchDepth + 1];
+        let isFenceLine = false;
+        {
+          let q = 0, cols = 0;
+          while (q < lazyRest.length && cols < 4) {
+            const cc = lazyRest.charCodeAt(q);
+            if (cc === 32) { cols++; q++; }
+            else if (cc === 9) { cols += 4 - (cols % 4); q++; }
+            else break;
+          }
+          if (cols < 4 && q + 2 < lazyRest.length) {
+            const ch = lazyRest.charCodeAt(q);
+            if ((ch === 96 || ch === 126) && lazyRest.charCodeAt(q + 1) === ch && lazyRest.charCodeAt(q + 2) === ch) isFenceLine = true;
+          }
+        }
+        if ((!failing || failing.kind !== 'quote') && !isFenceLine) {
+          deepest.text += stripFenceIndent(lazyRest, deepest.fenceIndent || 0, c.col) + '\n';
+          lastLineBlank = false;
+          continue;
+        }
+      }
       if (deepest.kind === 'p' && lazyRest.trim() === '') {
         let parent = null;
         for (let i = open.length - 1; i >= 0; i--) {
