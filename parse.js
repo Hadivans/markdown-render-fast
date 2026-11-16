@@ -438,7 +438,7 @@ const URL_SAFE = new Uint8Array(128);
 for (let i = 48; i <= 57; i++) URL_SAFE[i] = 1;
 for (let i = 65; i <= 90; i++) URL_SAFE[i] = 1;
 for (let i = 97; i <= 122; i++) URL_SAFE[i] = 1;
-for (const ch of ';/?:@&=+$,_.!~*\'()-#') URL_SAFE[ch.charCodeAt(0)] = 1;
+for (const ch of ';/?:@&=+$,_.!~*\'()-#%') URL_SAFE[ch.charCodeAt(0)] = 1;
 const HEXD = '0123456789ABCDEF';
 function isHexDigit(c) {
   return (c >= 48 && c <= 57) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102);
@@ -776,6 +776,7 @@ function tokenizeInline(src, refs) {
   const nodes = [];
   const brackets = [];
   let cur = '';
+  let delimSeq = 0;
   const flush = () => {
     if (cur !== '') {
       nodes.push(['t', cur]);
@@ -891,7 +892,7 @@ function tokenizeInline(src, refs) {
         canClose = rightFlanking;
       }
       flush();
-      nodes.push(['d', c === 42 ? '*' : c === 95 ? '_' : '~', run, canOpen, canClose]);
+      nodes.push(['d', c === 42 ? '*' : c === 95 ? '_' : '~', run, canOpen, canClose, delimSeq++]);
       i = j;
       continue;
     }
@@ -2044,21 +2045,29 @@ function parseFenceStart(s) {
 
 function stripFenceIndent(s, indent) {
   // Remove up to `indent` leading columns (spaces/tabs) from a fenced
-  // code content line.
+  // code content line. A tab that straddles the indent boundary is
+  // replaced by spaces for its remainder (doc-01: ` \tindented` with a
+  // 1-column fence indent becomes `   indented`, not a literal tab).
   if (indent <= 0) return s;
   let cols = 0;
   let i = 0;
+  let prefix = '';
   while (i < s.length && cols < indent) {
     const c = s.charCodeAt(i);
     if (c === 32) { cols++; i++; }
     else if (c === 9) {
       const adv = 4 - (cols % 4);
-      if (cols + adv > indent) break;
+      if (cols + adv > indent) {
+        // Tab straddles the boundary: the overshoot becomes spaces.
+        prefix = ' '.repeat(cols + adv - indent);
+        i++;
+        break;
+      }
       cols += adv;
       i++;
     } else break;
   }
-  return s.slice(i);
+  return prefix + s.slice(i);
 }
 
 function isClosingFence(rest, node) {
