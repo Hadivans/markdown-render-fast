@@ -1399,7 +1399,7 @@ function buildBlocks(lines, refs) {
       }
       const cur0 = top();
       if (cur0.kind === 'code') {
-        if (cur0.fenced) cur0.text += stripFenceIndent(line, cur0.fenceIndent || 0) + '\n';
+        if (cur0.fenced) cur0.text += stripFenceIndent(line, cur0.fenceChar === '~' ? 0 : (cur0.fenceIndent || 0)) + '\n';
         else cur0.text += stripIndentSpaces(line, 4) + '\n';
         lastLineBlank = true;
         continue;
@@ -1491,7 +1491,7 @@ function buildBlocks(lines, refs) {
           }
         }
         if ((!failing || failing.kind !== 'quote') && !isFenceLine && deepest.text !== '') {
-          deepest.text += stripFenceIndent(lazyRest, deepest.fenceIndent || 0, c.col) + '\n';
+          deepest.text += stripFenceIndent(lazyRest, deepest.fenceChar === '~' ? 0 : (deepest.fenceIndent || 0), c.col) + '\n';
           lastLineBlank = false;
           continue;
         }
@@ -1559,7 +1559,7 @@ function buildBlocks(lines, refs) {
       if (isClosingFence(rest, cur0)) {
         closeLeaf();
       } else {
-        cur0.text += stripFenceIndent(rest, cur0.fenceIndent || 0, restCol) + '\n';
+        cur0.text += stripFenceIndent(rest, cur0.fenceChar === '~' ? 0 : (cur0.fenceIndent || 0), restCol) + '\n';
       }
       lastLineBlank = false;
       continue;
