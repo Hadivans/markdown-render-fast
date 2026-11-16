@@ -1607,6 +1607,7 @@ function parseBlocks(state) {
 
     // ---- 2. Continue or start blocks from the remaining content. ----
     const rest = curRest(c);
+    const restCol = c.col;
     const cur0 = top();
     // An empty line inside containers (e.g. a lone `>` line) ends the
     // current paragraph but not the containers (cm-244 `> foo\n>\n> bar`
@@ -1685,7 +1686,7 @@ function parseBlocks(state) {
       }
     }
 
-    li += parseNewBlocks(rest, li);
+    li += parseNewBlocks(rest, li, restCol);
     lastLineBlank = false;
   }
 
@@ -1704,12 +1705,15 @@ function parseBlocks(state) {
     }
   }
 
-  function parseNewBlocks(text, li) {
+  function parseNewBlocks(text, li, startCol) {
+    startCol = startCol || 0;
     let extra = 0;
     let guard = 0;
     while (text !== '' && guard++ < 20) {
       // Leading whitespace in COLUMNS (a tab advances to the next multiple
-      // of 4). 4+ columns means an indented code block.
+      // of 4, measured from the ABSOLUTE column startCol, since a tab's
+      // width depends on its absolute position). 4+ columns means an
+      // indented code block.
       let leadCols = 0;
       let leadEnd = 0;
       while (leadEnd < text.length) {
@@ -1718,14 +1722,14 @@ function parseBlocks(state) {
           leadCols++;
           leadEnd++;
         } else if (c === 9) {
-          leadCols += 4 - (leadCols % 4);
+          leadCols += 4 - ((startCol + leadCols) % 4);
           leadEnd++;
         } else {
           break;
         }
       }
       if (leadCols >= 4) {
-        const node = { t: 'code', lang: null, text: sliceAtColumn(text, 4) + '\n', fenced: false };
+        const node = { t: 'code', lang: null, text: sliceAtColumn(text, 4, startCol) + '\n', fenced: false };
         // An indented code block is not a list item: close an open list.
         if (top().t === 'list') open.pop();
         markLooseIfNeeded();
@@ -1873,13 +1877,14 @@ function parseBlocks(state) {
 
 // ------------------------- block helpers -------------------------
 
-function sliceAtColumn(s, col) {
+function sliceAtColumn(s, col, startCol) {
+  startCol = startCol || 0;
   let c = 0;
   let i = 0;
   while (i < s.length && c < col) {
     const ch = s.charCodeAt(i);
     if (ch === 9) {
-      const w = 4 - (c % 4);
+      const w = 4 - ((startCol + c) % 4);
       if (c + w > col) {
         return ' '.repeat(c + w - col) + s.slice(i + 1);
       }
