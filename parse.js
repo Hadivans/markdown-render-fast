@@ -729,12 +729,13 @@ function extendUrlPath(s, end) {
     if (c === 32 || c === 60 || c === 10) break;
     j++;
   }
-  // Trim trailing punctuation.
-  while (j > end && /[?!.,:;*_~'"'\]}]/.test(s[j - 1])) j--;
-  // Trim a trailing entity-like `&word;` suffix.
+  // Trim a trailing entity-like `&word;` suffix FIRST (before the
+  // punctuation trim removes the `;`, gfm-627 `&hl;`).
   const tail = s.slice(end, j);
   const em = /&[A-Za-z0-9]+;$/.exec(tail);
   if (em) j -= em[0].length;
+  // Trim trailing punctuation.
+  while (j > end && /[?!.,:;*_~'"'\]}]/.test(s[j - 1])) j--;
   // Trim unbalanced trailing `)`.
   let opens = 0, closes = 0;
   for (let k = end; k < j; k++) {
@@ -1494,7 +1495,10 @@ function parseBlocks(state) {
         // A whitespace-only line inside a fenced code block keeps its
         // spaces (after the fence indent is stripped, cm-129).
         if (cur0.fenced) cur0.text += stripFenceIndent(line, cur0.fenceIndent || 0) + '\n';
-        else cur0.text += '\n';
+        // A whitespace-only line inside an INDENTED code block keeps its
+        // spaces after the 4-column code indent is stripped (cm-112:
+        // `      ` -> `  `).
+        else cur0.text += stripIndentSpaces(line, 4) + '\n';
         lastLineBlank = true;
         continue;
       }
@@ -2041,6 +2045,29 @@ function parseFenceStart(s) {
   // (cm-143 `ruby startline=3` -> `language-ruby`).
   const first = resolveEscapes(info.trim()).split(/[ \t]+/)[0] || '';
   return { ch: String.fromCharCode(ch), len: j, lang: first };
+}
+
+// Strip up to n leading columns from a whitespace-only line,
+// expanding a straddling tab to spaces (like stripFenceIndent).
+function stripIndentSpaces(s, n) {
+  let cols = 0;
+  let i = 0;
+  let prefix = '';
+  while (i < s.length && cols < n) {
+    const c = s.charCodeAt(i);
+    if (c === 32) { cols++; i++; }
+    else if (c === 9) {
+      const adv = 4 - (cols % 4);
+      if (cols + adv > n) {
+        prefix = ' '.repeat(cols + adv - n);
+        i++;
+        break;
+      }
+      cols += adv;
+      i++;
+    } else break;
+  }
+  return prefix + s.slice(i);
 }
 
 function stripFenceIndent(s, indent) {
