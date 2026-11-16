@@ -1386,9 +1386,16 @@ function parseBlocks(state) {
         if (idx >= 0) kids[idx] = tab;
       }
     } else if (b.t === 'code') {
-      // Strip trailing blank lines; keep a single trailing newline.
-      b.text = b.text.replace(/\n+$/, '');
-      if (b.text !== '') b.text += '\n';
+      if (b.fenced) {
+        // Fenced code: strip exactly ONE trailing newline (cm-318:
+        // `b` + 2 blank lines -> `b\n\n`, not `b\n`).
+        if (b.text.endsWith('\n\n')) b.text = b.text.slice(0, -1);
+      } else {
+        // Indented code: strip trailing blank lines; keep a single
+        // trailing newline.
+        b.text = b.text.replace(/\n+$/, '');
+        if (b.text !== '') b.text += '\n';
+      }
     }
   }
   function closeTo(keep) {
@@ -1521,8 +1528,16 @@ function parseBlocks(state) {
       if (deepest.t === 'p' && lazyRest.trim() === '') {
         // An empty container line (e.g. `>>` inside nested blockquotes)
         // ends the paragraph, it is not a lazy continuation (cm-259/260).
+        // It counts as a blank line for list-looseness only when the
+        // paragraph is a direct child of a list item (same rule as
+        // the empty-rest branch above).
+        let parent = null;
+        for (let i = open.length - 1; i >= 0; i--) {
+          if (open[i] === deepest) { parent = open[i - 1] || null; break; }
+        }
+        const inItem = parent && parent.t === 'item';
         closeLeaf();
-        lastLineBlank = true;
+        if (inItem) lastLineBlank = true;
         continue;
       }
       if (deepest.t === 'p' && !startsInterruptor(lazyRest, state) && !continuesOpenList(lazyRest) && !listMarkerInItem(lazyRest)) {
@@ -1543,8 +1558,16 @@ function parseBlocks(state) {
     // current paragraph but not the containers (cm-244 `> foo\n>\n> bar`
     // is two paragraphs in one blockquote).
     if (rest === '' && cur0.t === 'p') {
+      // An empty line inside containers (e.g. a lone `>` line) ends the
+      // current paragraph but not the containers (cm-244 `> foo\n>\n> bar`
+      // is two paragraphs in one blockquote). It counts as a blank line
+      // for list-looseness ONLY when the paragraph is a direct child of
+      // a list item (cm-259: `>>` separates two paragraphs in the item
+      // -> loose; cm-320: `>` inside a blockquote child does not).
+      const parent = open.length >= 2 ? open[open.length - 2] : null;
+      const inItem = parent && parent.t === 'item';
       closeLeaf();
-      lastLineBlank = true;
+      if (inItem) lastLineBlank = true;
       continue;
     }
     if (cur0.t === 'p') {
@@ -1684,6 +1707,9 @@ function parseBlocks(state) {
         const def = tryLinkRefDef(lines, li + extra, s, refs);
         if (def) {
           extra += def.consumed - 1;
+          // A ref def is a block-level element: if it follows a blank
+          // line inside a list item, the list goes loose (cm-317).
+          markLooseIfNeeded();
           if (def.rest !== '') {
             text = def.rest;
             continue;
