@@ -1407,6 +1407,32 @@ function parseBlocks(state) {
     const c = makeCursor(line);
 
     if (blank) {
+      // A truly blank line (no container marker) ends any open
+      // blockquote, even if it looks like code content (cm-252: the
+      // blank line after `>     code` closes the blockquote).
+      let hasQuote = false;
+      for (let i = open.length - 1; i >= 0; i--) {
+        if (open[i].t === 'quote') { hasQuote = true; break; }
+        if (open[i].t === 'doc') break;
+      }
+      if (hasQuote) {
+        closeLeaf();
+        while (open.length > 1) {
+          const t = top().t;
+          if (t === 'doc') break;
+          if (t === 'list' || t === 'item') {
+            let insideQuote = false;
+            for (let i = open.length - 2; i >= 0; i--) {
+              if (open[i].t === 'quote') { insideQuote = true; break; }
+              if (open[i].t === 'doc') break;
+            }
+            if (!insideQuote) break;
+          }
+          open.pop();
+        }
+        lastLineBlank = true;
+        continue;
+      }
       // Blank lines are content inside fenced and indented code blocks,
       // and inside HTML blocks of types 1-5 (which end at their closing
       // tag, not at a blank line).
@@ -1425,7 +1451,23 @@ function parseBlocks(state) {
         continue;
       }
       // Otherwise a blank line ends a paragraph and may loosen a list.
+      // It also closes any open blockquote (a blank line has no `>`
+      // marker, so a later `>` starts a NEW blockquote, cm-242/252).
+      // A top-level list stays open (it just goes loose).
       closeLeaf();
+      while (open.length > 1) {
+        const t = top().t;
+        if (t === 'doc') break;
+        if (t === 'list' || t === 'item') {
+          let insideQuote = false;
+          for (let i = open.length - 2; i >= 0; i--) {
+            if (open[i].t === 'quote') { insideQuote = true; break; }
+            if (open[i].t === 'doc') break;
+          }
+          if (!insideQuote) break;
+        }
+        open.pop();
+      }
       lastLineBlank = true;
       continue;
     }
@@ -1465,21 +1507,32 @@ function parseBlocks(state) {
 
     if (!allMatched) {
       const deepest = top();
+      // Restore the cursor to the last matched container BEFORE testing
+      // for an interruptor: a failed container match may have consumed
+      // indent, making `    - bar` look like a list item (cm-238).
+      curRestore(c, lastGood);
       if (deepest.t === 'p' && !startsInterruptor(curRest(c), state) && !continuesOpenList(curRest(c)) && !listMarkerInItem(curRest(c))) {
-        // Lazy paragraph continuation: the whole line (after matched
-        // containers) belongs to the paragraph.
-        curRestore(c, lastGood);
-        deepest.lines.push(curRest(c));
+        // Lazy paragraph continuation: the line (after matched
+        // containers) belongs to the paragraph, with its leading
+        // whitespace stripped (cm-238 `    - bar` -> `- bar`).
+        deepest.lines.push(curRest(c).replace(/^[ \t]+/, ''));
         lastLineBlank = false;
         continue;
       }
-      curRestore(c, lastGood);
       closeTo(matchDepth + 1);
     }
 
     // ---- 2. Continue or start blocks from the remaining content. ----
     const rest = curRest(c);
     const cur0 = top();
+    // An empty line inside containers (e.g. a lone `>` line) ends the
+    // current paragraph but not the containers (cm-244 `> foo\n>\n> bar`
+    // is two paragraphs in one blockquote).
+    if (rest === '' && cur0.t === 'p') {
+      closeLeaf();
+      lastLineBlank = true;
+      continue;
+    }
     if (cur0.t === 'p') {
       if (isSetextUnderline(rest)) {
         // Level 1 if the (leading-whitespace-stripped) underline
