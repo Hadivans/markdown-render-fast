@@ -638,7 +638,9 @@ function tryInlineHtml(s, i) {
         j = e;
       }
     } else {
-      j = v;
+      // Valueless attribute: leave j at the end of the name so the loop
+      // top sees (and skips) the following whitespace (cm-616
+      // `_boolean zoop:33=...`).
     }
   }
   return null;
@@ -683,12 +685,13 @@ function tryExtendedAutolink(s, i, prev) {
         // Reject if the domain is immediately followed by - or _
         // (the domain would end with it, gfm-632).
         if (end < n && (s.charCodeAt(end) === 45 || s.charCodeAt(end) === 95)) return null;
-        // One optional path segment (/txt), no second segment (gfm-635).
+        // One optional path segment (/txt, /txt@bin), no second segment
+        // (gfm-635). The segment allows @ and other URL path chars.
         if (end < n && s.charCodeAt(end) === 47) {
           let q = end + 1;
           while (q < n) {
             const c = s.charCodeAt(q);
-            if (isAlnum(c) || c === 45 || c === 46 || c === 95 || c === 126) q++;
+            if (isAlnum(c) || c === 45 || c === 46 || c === 95 || c === 126 || c === 64 || c === 58 || c === 43 || c === 61 || c === 38 || c === 37 || c === 59 || c === 44) q++;
             else break;
           }
           if (q > end + 1) end = q;
@@ -1048,7 +1051,7 @@ function tokenizeInline(src, refs) {
       const atBoundary =
         i === 0 ||
         prev === 32 || prev === 9 || prev === 10 || prev === 42 || prev === 95 || prev === 126 ||
-        prev === 40 || prev === 91 || prev === 123 || prev === 34 || prev === 39;
+        prev === 40 || prev === 91 || prev === 123 || prev === 34 || prev === 39 || prev === 60;
       if (atBoundary) {
         let tried = false;
         if (c === 119 && src.startsWith('www.', i)) tried = true;
