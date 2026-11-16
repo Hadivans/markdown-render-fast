@@ -1338,6 +1338,8 @@ function parseBlocks(state) {
   // list (same ordered flag and same bullet/delimiter). Such a line must
   // not be treated as a lazy paragraph continuation (cm-302 `2. bar`
   // continues an ordered list even though it does not start with 1).
+  // An EMPTY marker also continues the list (cm-281 `-` starts a new
+  // empty item); the content-emptiness check lives in startsInterruptor.
   function continuesOpenList(s) {
     let lst = null;
     for (let i = open.length - 1; i >= 0; i--) {
@@ -1348,13 +1350,14 @@ function parseBlocks(state) {
     const lm = listMarker(s, 0);
     if (!lm) return false;
     const ic = listItemContent(s, lm.end);
-    if (!ic || ic.content === '') return false;
+    if (!ic) return false;
     return lm.ordered === lst.ordered && lm.delim === lst.delim;
   }
 
   // True if the line is any list marker while the paragraph sits inside
   // a list item: the marker ends the current item (starting a new item
   // in the same list, or a new list if the marker differs, cm-302 `3)`).
+  // An EMPTY marker also ends the item (cm-281/282).
   function listMarkerInItem(s) {
     let inItem = false;
     for (let i = open.length - 1; i >= 0; i--) {
@@ -1365,7 +1368,7 @@ function parseBlocks(state) {
     const lm = listMarker(s, 0);
     if (!lm) return false;
     const ic = listItemContent(s, lm.end);
-    return !!ic && ic.content !== '';
+    return !!ic;
   }
 
   function isContainer(b) {
@@ -1453,8 +1456,11 @@ function parseBlocks(state) {
       // Otherwise a blank line ends a paragraph and may loosen a list.
       // It also closes any open blockquote (a blank line has no `>`
       // marker, so a later `>` starts a NEW blockquote, cm-242/252).
-      // A top-level list stays open (it just goes loose).
+      // A top-level list stays open (it just goes loose), but an EMPTY
+      // list item is closed by a blank line (cm-280: `  foo` after an
+      // empty `-` is a top-level paragraph, not item content).
       closeLeaf();
+      while (open.length > 1 && top().t === 'item' && top().children.length === 0) open.pop();
       while (open.length > 1) {
         const t = top().t;
         if (t === 'doc') break;
@@ -1511,11 +1517,19 @@ function parseBlocks(state) {
       // for an interruptor: a failed container match may have consumed
       // indent, making `    - bar` look like a list item (cm-238).
       curRestore(c, lastGood);
-      if (deepest.t === 'p' && !startsInterruptor(curRest(c), state) && !continuesOpenList(curRest(c)) && !listMarkerInItem(curRest(c))) {
+      const lazyRest = curRest(c);
+      if (deepest.t === 'p' && lazyRest.trim() === '') {
+        // An empty container line (e.g. `>>` inside nested blockquotes)
+        // ends the paragraph, it is not a lazy continuation (cm-259/260).
+        closeLeaf();
+        lastLineBlank = true;
+        continue;
+      }
+      if (deepest.t === 'p' && !startsInterruptor(lazyRest, state) && !continuesOpenList(lazyRest) && !listMarkerInItem(lazyRest)) {
         // Lazy paragraph continuation: the line (after matched
         // containers) belongs to the paragraph, with its leading
         // whitespace stripped (cm-238 `    - bar` -> `- bar`).
-        deepest.lines.push(curRest(c).replace(/^[ \t]+/, ''));
+        deepest.lines.push(lazyRest.replace(/^[ \t]+/, ''));
         lastLineBlank = false;
         continue;
       }
