@@ -559,7 +559,7 @@ function tryInlineHtml(s, i) {
 
 // --- GFM extended autolinks: www. / http(s):// / email at a word boundary ---
 
-function tryExtAutolink(s, i, prev) {
+function tryExtAutolink(s, i, prev, nodes) {
   const n = s.length;
   if (prev !== -1 && isAlnumCode(prev)) return null;
   if (s.startsWith('www.', i)) {
@@ -587,7 +587,26 @@ function tryExtAutolink(s, i, prev) {
       const em = /^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+/.exec(s.slice(after));
       if (em) {
         let end = after + em[0].length;
-        if (end < n && (s.charCodeAt(end) === 45 || s.charCodeAt(end) === 95)) return null;
+        if (end < n && (s.charCodeAt(end) === 45 || s.charCodeAt(end) === 95)) {
+          const nx = end + 1 < n ? s.charCodeAt(end + 1) : -1;
+          if (nx !== -1 && (isAlnumCode(nx) || nx === 95 || nx === 45)) {
+            while (end < n) {
+              const cc = s.charCodeAt(end);
+              if (isAlnumCode(cc) || cc === 95 || cc === 45) end++;
+              else break;
+            }
+          } else if (s.charCodeAt(end) === 45) {
+            return null;
+          } else {
+            let openUnd = false;
+            if (nodes) {
+              for (const nd of nodes) {
+                if (nd[0] === 'd' && nd[1] === '_' && nd[3]) { openUnd = true; break; }
+              }
+            }
+            if (!openUnd) return null;
+          }
+        }
         if (end < n && s.charCodeAt(end) === 47) {
           let q = end + 1;
           while (q < n) {
@@ -606,7 +625,31 @@ function tryExtAutolink(s, i, prev) {
     const m = /^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+/.exec(s.slice(i));
     if (!m) return null;
     let end = i + m[0].length;
-    if (end < n && (s.charCodeAt(end) === 45 || s.charCodeAt(end) === 95)) return null;
+    // Trailing - or _ followed by a word char extends the address
+    // (foo@bar.com-baz / foo@bar.com_baz link whole). A trailing - at a
+    // boundary kills the autolink (foo@bar.com- -> no link). A trailing _
+    // at a boundary only links when it closes an open _ emphasis
+    // (_warning when@x_ links; bare foo@bar.com_ does not, gfm-632).
+    if (end < n && (s.charCodeAt(end) === 45 || s.charCodeAt(end) === 95)) {
+      const nx = end + 1 < n ? s.charCodeAt(end + 1) : -1;
+      if (nx !== -1 && (isAlnumCode(nx) || nx === 95 || nx === 45)) {
+        while (end < n) {
+          const cc = s.charCodeAt(end);
+          if (isAlnumCode(cc) || cc === 95 || cc === 45) end++;
+          else break;
+        }
+      } else if (s.charCodeAt(end) === 45) {
+        return null;
+      } else {
+        let openUnd = false;
+        if (nodes) {
+          for (const nd of nodes) {
+            if (nd[0] === 'd' && nd[1] === '_' && nd[3]) { openUnd = true; break; }
+          }
+        }
+        if (!openUnd) return null;
+      }
+    }
     while (end > i && /[?!.,:;*_~]/.test(s[end - 1])) end--;
     const dest = s.slice(i, end);
     if (dest.length === 0) return null;
@@ -950,7 +993,7 @@ function tokenizeInline(src, refs) {
           }
         }
         if (tried) {
-          const al = tryExtAutolink(src, i, prev);
+          const al = tryExtAutolink(src, i, prev, nodes);
           if (al) {
             flush();
             nodes.push(al[0]);
