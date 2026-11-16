@@ -729,7 +729,7 @@ function extendUrlPath(s, end) {
   let j = end;
   while (j < n) {
     const c = s.charCodeAt(j);
-    if (c === 32 || c === 60 || c === 10) break;
+    if (c === 32 || c === 60 || c === 10 || c === 93) break;
     j++;
   }
   // Trim a trailing entity-like `&word;` suffix FIRST (before the
@@ -1045,8 +1045,10 @@ function tokenizeInline(src, refs) {
       i++;
       continue;
     }
-    // GFM extended autolinks at a word boundary
-    if (c === 119 || c === 104 || isAlnum(c) || c === 95 || c === 46) {
+    // GFM extended autolinks at a word boundary. A bare URL inside link
+    // text `[...]` is plain text, not an autolink (doc-04: the
+    // `https://...` inside `[inline and data ...](...)` stays literal).
+    if (brackets.length === 0 && (c === 119 || c === 104 || isAlnum(c) || c === 95 || c === 46)) {
       const prev = i === 0 ? -1 : src.charCodeAt(i - 1);
       const atBoundary =
         i === 0 ||
@@ -2157,7 +2159,13 @@ function htmlBlockType(s) {
   const m6 = /^<\/?([A-Za-z][A-Za-z0-9-]*)(?:[ \t/>]|$)/.exec(s);
   if (m6 && HTML_BLOCK_NAMES.has(m6[1].toLowerCase())) return 6;
   // Type 7: any other complete open or close tag on its own line.
-  const m7 = /^<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:[^ \t"'=<>`]+|'[^']*'|"[^"]*"))?)*[ \t]*\/?>[ \t]*$/.exec(s);
+  // A closing tag takes NO attributes (cm-624 `</a href="foo">` is
+  // not an HTML block, it is a paragraph).
+  if (s.startsWith('</')) {
+    if (/^<\/[A-Za-z][A-Za-z0-9-]*[ \t]*>[ \t]*$/.test(s)) return 7;
+    return 0;
+  }
+  const m7 = /^<[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:[^ \t"'=<>`]+|'[^']*'|"[^"]*"))?)*[ \t]*\/?>[ \t]*$/.exec(s);
   if (m7) return 7;
   return 0;
 }
