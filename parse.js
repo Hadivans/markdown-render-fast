@@ -451,7 +451,7 @@ function tryAutolink(s, i) {
       if (c === 62) {
         const dest = s.slice(j, e);
         if (dest.length === 0) return null;
-        return [['l', cleanUrl(dest), null, [['t', dest]]], e + 1];
+        return [['l', cleanUrl(dest), null, [['t', dest]], 1], e + 1];
       }
       if (c === 32 || c === 60 || c === 10) return null;
       e++;
@@ -463,7 +463,7 @@ function tryAutolink(s, i) {
     const end = i + 1 + m[0].length;
     if (end < n && s.charCodeAt(end) === 62) {
       const dest = m[0];
-      return [['l', 'mailto:' + cleanUrl(dest), null, [['t', dest]]], end + 1];
+      return [['l', 'mailto:' + cleanUrl(dest), null, [['t', dest]], 1], end + 1];
     }
   }
   return null;
@@ -568,7 +568,7 @@ function tryExtAutolink(s, i, prev) {
     let end = i + m[0].length;
     end = extendUrl(s, end);
     const dest = s.slice(i, end);
-    return [['l', 'http://' + cleanUrl(dest), null, [['t', dest]]], end];
+    return [['l', 'http://' + cleanUrl(dest), null, [['t', dest]], 1], end];
   }
   const low7 = s.slice(i, i + 7).toLowerCase();
   const low8 = s.slice(i, i + 8).toLowerCase();
@@ -578,7 +578,7 @@ function tryExtAutolink(s, i, prev) {
     let end = i + m[0].length;
     end = extendUrl(s, end);
     const dest = s.slice(i, end);
-    return [['l', cleanUrl(dest), null, [['t', dest]]], end];
+    return [['l', cleanUrl(dest), null, [['t', dest]], 1], end];
   }
   {
     const sm = /^[A-Za-z][A-Za-z0-9+.-]{1,31}:/.exec(s.slice(i));
@@ -598,7 +598,7 @@ function tryExtAutolink(s, i, prev) {
           if (q > end + 1) end = q;
         }
         const dest = s.slice(i, end);
-        return [['l', cleanUrl(dest), null, [['t', dest]]], end];
+        return [['l', cleanUrl(dest), null, [['t', dest]], 1], end];
       }
     }
   }
@@ -610,7 +610,7 @@ function tryExtAutolink(s, i, prev) {
     while (end > i && /[?!.,:;*_~]/.test(s[end - 1])) end--;
     const dest = s.slice(i, end);
     if (dest.length === 0) return null;
-    return [['l', 'mailto:' + cleanUrl(dest), null, [['t', dest]]], end];
+    return [['l', 'mailto:' + cleanUrl(dest), null, [['t', dest]], 1], end];
   }
   return null;
 }
@@ -629,15 +629,23 @@ function extendUrl(s, end) {
   const tail = s.slice(end, j);
   const em = /&[A-Za-z0-9]+;$/.exec(tail);
   if (em) j -= em[0].length;
-  while (j > end && /[?!.,:;*_~'"'\]}]/.test(s[j - 1])) j--;
-  let opens = 0, closes = 0;
-  for (let k = end; k < j; k++) {
-    if (s.charCodeAt(k) === 40) opens++;
-    else if (s.charCodeAt(k) === 41) closes++;
-  }
-  while (j > end && s.charCodeAt(j - 1) === 41 && closes > opens) {
-    j--;
-    closes--;
+  // Trim trailing punctuation and unbalanced `)` interleaved: trimming a
+  // `)` can expose punctuation (e.g. `nova).)` -> `.` then `)`), and
+  // trimming punctuation can expose a `)`. Loop until stable.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    while (j > end && /[?!.,:;*_~'"'\]}]/.test(s[j - 1])) { j--; changed = true; }
+    let opens = 0, closes = 0;
+    for (let k = end; k < j; k++) {
+      if (s.charCodeAt(k) === 40) opens++;
+      else if (s.charCodeAt(k) === 41) closes++;
+    }
+    while (j > end && s.charCodeAt(j - 1) === 41 && closes > opens) {
+      j--;
+      closes--;
+      changed = true;
+    }
   }
   return j;
 }
@@ -853,7 +861,10 @@ function tokenizeInline(src, refs) {
           } else {
             let hasLink = false;
             for (const ch of children) {
-              if (ch[0] === 'l') {
+              // A bracket link inside link text blocks the outer link, but
+              // an autolink (<...> or GFM extended) inside link text does
+              // not — marked renders the outer link around it.
+              if (ch[0] === 'l' && !ch[4]) {
                 hasLink = true;
                 break;
               }
@@ -1022,14 +1033,18 @@ function processEmphasis(nodes) {
     while (oi >= 0) {
       const opener = delims[oi];
       if (opener.ch === closer.ch && opener.open) {
-        // Rule of 3 (emphasis `*`/`_` only, not `~`): when the total
-        // length is a multiple of 3 and the closer can also open, the
-        // pair can only match when BOTH delimiters can both open and
-        // close. (A closer that cannot open never triggers the rule,
-        // e.g. cm-408 `__foo_ bar_`.)
+        // Rule of 3 (emphasis `*`/`_` only, not `~`): CommonMark rule 9
+        // — when one of the two delimiters can both open and close, the
+        // pair may only match if the sum of the lengths is NOT a
+        // multiple of 3, unless both lengths are multiples of 3. (The
+        // old form — "closer can open and not both can both" — wrongly
+        // lets cm-412 `*foo**bar*` pair the inner `**` with the final `*`.)
         if (closer.ch !== '~') {
-          const bothClose = opener.close && closer.close;
-          if ((opener.n + closer.n) % 3 === 0 && closer.open && !bothClose) {
+          const openerBoth = opener.open && opener.close;
+          const closerBoth = closer.open && closer.close;
+          const sumMult3 = (opener.n + closer.n) % 3 === 0;
+          const bothMult3 = opener.n % 3 === 0 && closer.n % 3 === 0;
+          if (sumMult3 && (openerBoth || closerBoth) && !bothMult3) {
             oi--;
             continue;
           }
@@ -1411,7 +1426,8 @@ function buildBlocks(lines, refs) {
         if (inItem) lastLineBlank = true;
         continue;
       }
-      if (deepest.kind === 'p' && !startsInterruptor(lazyRest, refs) && !continuesOpenList(lazyRest) && !listMarkerInItem(lazyRest)) {
+      const inItemLazy = open.slice(0, -1).some(b => b.kind === 'item');
+      if (deepest.kind === 'p' && !startsInterruptor(lazyRest, refs, inItemLazy) && !continuesOpenList(lazyRest) && !listMarkerInItem(lazyRest)) {
         const stripped = lazyRest.replace(/^[ \t]+/, '');
         if (deepest.hadLazy && /^=+[ \t]*$/.test(stripped)) {
           deepest.lines.push('    ' + stripped);
@@ -1449,7 +1465,7 @@ function buildBlocks(lines, refs) {
         else kids.push(h);
         lastLineBlank = false;
         continue;
-      } else if (startsInterruptor(rest, refs)) {
+      } else if (startsInterruptor(rest, refs, open.slice(0, -1).some(b => b.kind === 'item'))) {
         closeLeaf();
       } else {
         cur0.lines.push(rest);
@@ -2156,7 +2172,7 @@ function tryTable(lines) {
 
 // --- interruptor check: can this line interrupt a paragraph? ---
 
-function startsInterruptor(s, refs) {
+function startsInterruptor(s, refs, inListItem) {
   let leadCols = 0;
   let leadEnd = 0;
   while (leadEnd < s.length) {
@@ -2188,6 +2204,10 @@ function startsInterruptor(s, refs) {
     const ic = listItemContent(t, lm.end);
     if (!ic || ic.content === '') return false;
     if (!lm.ordered) return true;
+    // Inside a list item, any ordered marker ends the paragraph and
+    // starts a nested list (CommonMark: the "must start with 1" rule
+    // only guards interrupting a paragraph at top level).
+    if (inListItem) return true;
     return lm.num === 1;
   }
   return false;
