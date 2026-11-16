@@ -1670,7 +1670,9 @@ function parseBlocks(state) {
         closeLeaf();
       } else {
         // Strip up to the opening fence's indent from the content line.
-        cur0.text += stripFenceIndent(rest, cur0.fenceIndent || 0) + '\n';
+        // `rest` starts at absolute column restCol, so a leading tab
+        // expands by absolute column.
+        cur0.text += stripFenceIndent(rest, cur0.fenceIndent || 0, restCol) + '\n';
       }
       lastLineBlank = false;
       continue;
@@ -2130,29 +2132,43 @@ function stripIndentSpaces(s, n) {
   return prefix + s.slice(i);
 }
 
-function stripFenceIndent(s, indent) {
+function stripFenceIndent(s, indent, startCol) {
   // Remove up to `indent` leading columns (spaces/tabs) from a fenced
-  // code content line. A tab that straddles the indent boundary is
-  // replaced by spaces for its remainder (doc-01: ` \tindented` with a
-  // 1-column fence indent becomes `   indented`, not a literal tab).
-  if (indent <= 0) return s;
-  let cols = 0;
+  // code content line. `startCol` is the ABSOLUTE column of s[0] (a
+  // tab's width depends on its absolute position).
+  // - A tab that straddles the indent boundary is consumed whole and
+  //   dropped (it supplied the indent).
+  // - A tab AFTER the indent is expanded to spaces to the next tab
+  //   stop, measured from its absolute column — EXCEPT a tab at
+  //   absolute column 0 with no indent, which is kept literally.
+  //   (doc-01 ` \tindented`, 1-col fence indent -> `   indented`;
+  //   top-level `\tfoo`, indent 0 -> `\tfoo`.)
+  startCol = startCol || 0;
+  let absCol = startCol;
   let i = 0;
-  let prefix = '';
-  while (i < s.length && cols < indent) {
+  while (i < s.length && absCol - startCol < indent) {
     const c = s.charCodeAt(i);
-    if (c === 32) { cols++; i++; }
+    if (c === 32) { absCol++; i++; }
     else if (c === 9) {
-      const adv = 4 - (cols % 4);
-      if (cols + adv > indent) {
-        // Tab straddles the boundary: the overshoot becomes spaces.
-        prefix = ' '.repeat(cols + adv - indent);
+      const adv = 4 - (absCol % 4);
+      if (absCol - startCol + adv > indent) {
+        // Straddling tab: consumed whole, dropped, indent satisfied.
+        absCol += adv;
         i++;
         break;
       }
-      cols += adv;
+      absCol += adv;
       i++;
     } else break;
+  }
+  // Expand any leading tabs that remain, by absolute column.
+  let prefix = '';
+  while (i < s.length && s.charCodeAt(i) === 9) {
+    if (absCol === 0) break; // literal tab at column 0
+    const w = 4 - (absCol % 4);
+    prefix += ' '.repeat(w);
+    absCol += w;
+    i++;
   }
   return prefix + s.slice(i);
 }
