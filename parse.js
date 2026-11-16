@@ -1706,12 +1706,15 @@ function parseBlocks(state) {
   }
 
   function parseNewBlocks(text, li, startCol) {
-    startCol = startCol || 0;
+    // curCol tracks the ABSOLUTE column of the current `text` (it changes
+    // as `text` is reassigned when containers are opened). Tab widths
+    // depend on the absolute column, so this must stay in sync.
+    let curCol = startCol || 0;
     let extra = 0;
     let guard = 0;
     while (text !== '' && guard++ < 20) {
       // Leading whitespace in COLUMNS (a tab advances to the next multiple
-      // of 4, measured from the ABSOLUTE column startCol, since a tab's
+      // of 4, measured from the ABSOLUTE column curCol, since a tab's
       // width depends on its absolute position). 4+ columns means an
       // indented code block.
       let leadCols = 0;
@@ -1722,14 +1725,14 @@ function parseBlocks(state) {
           leadCols++;
           leadEnd++;
         } else if (c === 9) {
-          leadCols += 4 - ((startCol + leadCols) % 4);
+          leadCols += 4 - ((curCol + leadCols) % 4);
           leadEnd++;
         } else {
           break;
         }
       }
       if (leadCols >= 4) {
-        const node = { t: 'code', lang: null, text: sliceAtColumn(text, 4, startCol) + '\n', fenced: false };
+        const node = { t: 'code', lang: null, text: sliceAtColumn(text, 4, curCol) + '\n', fenced: false };
         // An indented code block is not a list item: close an open list.
         if (top().t === 'list') open.pop();
         markLooseIfNeeded();
@@ -1744,7 +1747,7 @@ function parseBlocks(state) {
       // the list is over: close it before starting any other block.
       // (A thematic break line looks like a list marker but wins over it.)
       const lmTop = listMarker(s, 0);
-      const icTop = lmTop ? listItemContent(s, lmTop.end) : null;
+      const icTop = lmTop ? listItemContent(s, lmTop.end, curCol + leadCols) : null;
       if (top().t === 'list') {
         const lst = top();
         if (
@@ -1769,6 +1772,7 @@ function parseBlocks(state) {
           // line inside a list item, the list goes loose (cm-317).
           markLooseIfNeeded();
           if (def.rest !== '') {
+            curCol = curCol + leadCols + colWidth(s.slice(0, s.length - def.rest.length), curCol + leadCols);
             text = def.rest;
             continue;
           }
@@ -1825,11 +1829,27 @@ function parseBlocks(state) {
       if (s.charCodeAt(0) === 62) {
         let j = 1;
         if (j < s.length && s.charCodeAt(j) === 32) j++;
+        else if (j < s.length && s.charCodeAt(j) === 9) {
+          // A tab after `>` counts as 1 column of indent; the remainder
+          // of the tab becomes leading spaces of the content (cm-006:
+          // `>\t\tfoo` -> content `  \tfoo`, which is indented code
+          // with 2 leading spaces).
+          const tabCol = curCol + leadCols + 1;
+          const w = 4 - (tabCol % 4);
+          text = ' '.repeat(w - 1) + s.slice(2);
+          curCol = tabCol + 1;
+          const node = { t: 'quote', children: [] };
+          markLooseIfNeeded();
+          top().children.push(node);
+          open.push(node);
+          continue;
+        }
         const node = { t: 'quote', children: [] };
         markLooseIfNeeded();
         top().children.push(node);
         open.push(node);
         text = s.slice(j);
+        curCol = curCol + leadCols + j;
         continue;
       }
       // List
@@ -1857,7 +1877,7 @@ function parseBlocks(state) {
           listNode.children.push(itemNode);
           open.push(itemNode);
           if (ic.content !== '') {
-            parseNewBlocks(ic.content, li + extra);
+            parseNewBlocks(ic.content, li + extra, curCol + leadCols + ic.indent);
           }
           return extra;
         }
@@ -1876,6 +1896,18 @@ function parseBlocks(state) {
 }
 
 // ------------------------- block helpers -------------------------
+
+// Column width of string s when it starts at absolute column startCol
+// (a tab advances to the next multiple of 4).
+function colWidth(s, startCol) {
+  let c = startCol || 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charCodeAt(i);
+    if (ch === 9) c += 4 - (c % 4);
+    else c++;
+  }
+  return c - (startCol || 0);
+}
 
 function sliceAtColumn(s, col, startCol) {
   startCol = startCol || 0;
@@ -1974,7 +2006,8 @@ function listMarker(s, start) {
 
 // Given a line `s` and the marker end index, compute the item's content
 // indent (columns) and content string. Returns null if not a valid item.
-function listItemContent(s, mEnd) {
+function listItemContent(s, mEnd, startCol) {
+  startCol = startCol || 0;
   let col = mEnd;
   let i = mEnd;
   let spaces = 0;
@@ -1985,9 +2018,9 @@ function listItemContent(s, mEnd) {
       col++;
       i++;
     } else if (ch === 9) {
-      const w = 4 - (col % 4);
+      const w = 4 - ((startCol + col) % 4);
       if (spaces + w >= 5) {
-        return { indent: mEnd + 1, content: sliceAtColumn(s, mEnd + 1) };
+        return { indent: mEnd + 1, content: sliceAtColumn(s, mEnd + 1, startCol) };
       }
       spaces += w;
       col += w;
@@ -2001,7 +2034,7 @@ function listItemContent(s, mEnd) {
   }
   if (spaces === 0) return null;
   if (spaces >= 5) {
-    return { indent: mEnd + 1, content: sliceAtColumn(s, mEnd + 1) };
+    return { indent: mEnd + 1, content: sliceAtColumn(s, mEnd + 1, startCol) };
   }
   return { indent: col, content: s.slice(i) };
 }
