@@ -1345,7 +1345,10 @@ function buildBlocks(lines, refs) {
       }
     } else if (b.kind === 'code') {
       if (b.fenced) {
-        if (b.text.endsWith('\n\n')) b.text = b.text.slice(0, -1);
+        // Strip one trailing newline when the last content line is blank:
+        // text "\n\n" -> "\n", and a lone blank line "\n" -> "" (marked:
+        // a fence holding a single blank line renders empty).
+        if (b.text === '\n' || b.text.endsWith('\n\n')) b.text = b.text.slice(0, -1);
       } else {
         b.text = b.text.replace(/\n+$/, '');
         if (b.text !== '') b.text += '\n';
