@@ -1412,7 +1412,10 @@ function parseBlocks(state) {
       // tag, not at a blank line).
       const cur0 = top();
       if (cur0.t === 'code') {
-        cur0.text += '\n';
+        // A whitespace-only line inside a fenced code block keeps its
+        // spaces (after the fence indent is stripped, cm-129).
+        if (cur0.fenced) cur0.text += stripFenceIndent(line, cur0.fenceIndent || 0) + '\n';
+        else cur0.text += '\n';
         lastLineBlank = true;
         continue;
       }
@@ -1506,7 +1509,8 @@ function parseBlocks(state) {
       if (isClosingFence(rest, cur0)) {
         closeLeaf();
       } else {
-        cur0.text += rest + '\n';
+        // Strip up to the opening fence's indent from the content line.
+        cur0.text += stripFenceIndent(rest, cur0.fenceIndent || 0) + '\n';
       }
       lastLineBlank = false;
       continue;
@@ -1638,7 +1642,9 @@ function parseBlocks(state) {
       if (s.charCodeAt(0) === 96 || s.charCodeAt(0) === 126) {
         const f = parseFenceStart(s);
         if (f) {
-          const node = { t: 'code', lang: f.lang, text: '', fenced: true, fenceChar: f.ch, fenceLen: f.len };
+          // Content lines have up to the fence's indent stripped
+          // (cm-131/132/133).
+          const node = { t: 'code', lang: f.lang, text: '', fenced: true, fenceChar: f.ch, fenceLen: f.len, fenceIndent: leadCols };
           markLooseIfNeeded();
           top().children.push(node);
           open.push(node);
@@ -1895,12 +1901,43 @@ function parseFenceStart(s) {
   if (j < 3) return null;
   const info = s.slice(j);
   if (ch === 96 && info.includes('`')) return null;
-  return { ch: String.fromCharCode(ch), len: j, lang: resolveEscapes(info.trim()) };
+  // The language class uses the FIRST WORD of the info string
+  // (cm-143 `ruby startline=3` -> `language-ruby`).
+  const first = resolveEscapes(info.trim()).split(/[ \t]+/)[0] || '';
+  return { ch: String.fromCharCode(ch), len: j, lang: first };
+}
+
+function stripFenceIndent(s, indent) {
+  // Remove up to `indent` leading columns (spaces/tabs) from a fenced
+  // code content line.
+  if (indent <= 0) return s;
+  let cols = 0;
+  let i = 0;
+  while (i < s.length && cols < indent) {
+    const c = s.charCodeAt(i);
+    if (c === 32) { cols++; i++; }
+    else if (c === 9) {
+      const adv = 4 - (cols % 4);
+      if (cols + adv > indent) break;
+      cols += adv;
+      i++;
+    } else break;
+  }
+  return s.slice(i);
 }
 
 function isClosingFence(rest, node) {
+  // Leading indent must be < 4 columns (cm-137: 4 spaces is content,
+  // not a closing fence).
+  let cols = 0;
   let i = 0;
-  while (i < rest.length && rest.charCodeAt(i) === 32) i++;
+  while (i < rest.length) {
+    const c = rest.charCodeAt(i);
+    if (c === 32) { cols++; i++; }
+    else if (c === 9) { cols += 4 - (cols % 4); i++; }
+    else break;
+  }
+  if (cols >= 4) return false;
   const s = rest.slice(i);
   if (s === '') return false;
   const ch = s.charCodeAt(0);
