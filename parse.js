@@ -32,7 +32,10 @@ function fixHtmlTrailingNewlines(children, lines, inputEndsWithNL) {
   for (const n of leaves) {
     if (n.kind !== 'html' || !n.text.endsWith('\n')) continue;
     const next = lines[n.endLine + 1];
-    const nextBlank = next !== undefined && blankLine(next);
+    // Only a truly empty next line strips the trailing newline; a
+    // whitespace-only line (spaces/tabs) keeps it (marked: <!-- --> \t
+    // keeps -->\n, <!-- --> <empty> strips it).
+    const nextBlank = next !== undefined && next === '';
     if (nextBlank || (n.htmlType >= 6 && n !== last)) n.text = n.text.slice(0, -1);
     else if (n === last && n.endLine === lines.length - 1 && !inputEndsWithNL) n.text = n.text.slice(0, -1);
   }
