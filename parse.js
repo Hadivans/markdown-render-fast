@@ -547,9 +547,11 @@ function tryAutolink(s, i) {
 function tryInlineHtml(s, i) {
   const n = s.length;
   if (i + 1 >= n || s.charCodeAt(i + 1) === 32) return null;
-  // comment <!-- ... -->  (<!--> and <!---> are NOT comments)
+  // comment <!-- ... -->  (`<!-->` and `<!--->` are complete empty
+  // comments by themselves, cm-626; they do not run on to a later `-->`.)
   if (s.startsWith('<!--', i)) {
-    if (i + 4 < n && (s.charCodeAt(i + 4) === 62 || (s.charCodeAt(i + 4) === 45 && i + 5 < n && s.charCodeAt(i + 5) === 62))) return null;
+    if (i + 4 < n && s.charCodeAt(i + 4) === 62) return [s.slice(i, i + 5), i + 5];
+    if (i + 5 < n && s.charCodeAt(i + 4) === 45 && s.charCodeAt(i + 5) === 62) return [s.slice(i, i + 6), i + 6];
     let j = i + 4;
     while (j < n) {
       if (s.startsWith('-->', j)) return [s.slice(i, j + 3), j + 3];
