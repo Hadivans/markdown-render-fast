@@ -1466,12 +1466,15 @@ function buildBlocks(lines, refs) {
       curRestore(c, lastGood);
       const lazyRest = curRest(c);
       if (deepest.kind === 'code' && deepest.fenced) {
-        // Fenced code content lines do not need to match a LIST ITEM's
-        // indent: the fence protects its content until the closing fence
-        // (LI1/MINI). But a line without `>` does NOT belong to a code
-        // block inside a BLOCKQUOTE (cm-237/BQ1: the quote closes
-        // instead). And a fence-looking line must not become content: it
-        // closes the containers and may open a new fence (CLOSE0).
+        // A fenced code block inside a list item keeps under-indented
+        // content lines ONLY once it already has content (the fence is
+        // established): the first content line must match the item indent,
+        // else the fence ends empty (B/B2: first line 0-indent -> empty
+        // fence, line becomes top-level). But a line without `>` does NOT
+        // belong to a code block inside a BLOCKQUOTE (cm-237/BQ1: the
+        // quote closes instead). And a fence-looking line never becomes
+        // code content: it closes the containers and may open a new
+        // fence (CLOSE0).
         const failing = open[matchDepth + 1];
         let isFenceLine = false;
         {
@@ -1487,7 +1490,7 @@ function buildBlocks(lines, refs) {
             if ((ch === 96 || ch === 126) && lazyRest.charCodeAt(q + 1) === ch && lazyRest.charCodeAt(q + 2) === ch) isFenceLine = true;
           }
         }
-        if ((!failing || failing.kind !== 'quote') && !isFenceLine) {
+        if ((!failing || failing.kind !== 'quote') && !isFenceLine && deepest.text !== '') {
           deepest.text += stripFenceIndent(lazyRest, deepest.fenceIndent || 0, c.col) + '\n';
           lastLineBlank = false;
           continue;
