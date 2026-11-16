@@ -1502,11 +1502,13 @@ function buildBlocks(lines, refs) {
       }
       const inItemLazy = open.slice(0, -1).some(b => b.kind === 'item');
       if (deepest.kind === 'p' && !startsInterruptor(lazyRest, refs, inItemLazy) && !continuesOpenList(lazyRest) && !listMarkerInItem(lazyRest)) {
-        const stripped = lazyRest.replace(/^[ \t]+/, '');
-        if (deepest.hadLazy && /^=+[ \t]*$/.test(stripped)) {
-          deepest.lines.push('    ' + stripped);
+        // Lazy continuation lines keep 1-3 cols of leading whitespace and
+        // lose exactly one indent level (4 cols) when they have >= 4.
+        const lazyLine = stripLazyIndent(lazyRest);
+        if (deepest.hadLazy && /^[ \t]*=+[ \t]*$/.test(lazyLine)) {
+          deepest.lines.push('    ' + lazyLine.replace(/^[ \t]+/, ''));
         } else {
-          deepest.lines.push(stripped);
+          deepest.lines.push(lazyLine);
         }
         deepest.hadLazy = true;
         lastLineBlank = false;
@@ -1970,6 +1972,22 @@ function stripIndentSpaces(s, n) {
   return prefix + s.slice(i);
 }
 
+function stripLazyIndent(s) {
+  // A lazy continuation line with >= 4 cols of leading whitespace has
+  // exactly one indent level (4 cols) stripped; with 1-3 cols the
+  // whitespace is kept as paragraph text (marked: 4sp -> 0, 5sp -> 1sp,
+  // 6sp -> 2sp, tab -> 0, 3sp -> 3sp).
+  let col = 0;
+  let i = 0;
+  while (i < s.length) {
+    const c = s.charCodeAt(i);
+    if (c === 32) { col++; i++; }
+    else if (c === 9) { col += 4 - (col % 4); i++; }
+    else break;
+    if (col >= 4) return s.slice(i);
+  }
+  return s;
+}
 function stripFenceIndent(s, indent, startCol) {
   startCol = startCol || 0;
   let absCol = startCol;
